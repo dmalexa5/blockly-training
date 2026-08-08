@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import asyncio
 import contextlib
 import time
@@ -15,6 +16,7 @@ from pydantic import BaseModel
 MODULES = {"button", "rebounder"}
 DEVICE_FRESH_SECONDS = 5.0
 DEFAULT_WAIT_SECONDS = 60.0
+MAX_REPEAT_COUNT = 20
 
 
 class RunRequest(BaseModel):
@@ -33,7 +35,7 @@ class DeviceEvent(BaseModel):
 @dataclass
 class ModuleState:
     last_poll_at: float | None = None
-    pending_command: str | None = None
+    pending_commands: list[str] = field(default_factory=list)
     waiter: asyncio.Future[DeviceEvent] | None = None
 
 
@@ -65,7 +67,7 @@ class RbdrRuntime:
 
             loop = asyncio.get_running_loop()
             module_state.waiter = loop.create_future()
-            module_state.pending_command = "activate"
+            module_state.pending_commands.append("activate")
             waiter = module_state.waiter
 
         try:
@@ -78,7 +80,7 @@ class RbdrRuntime:
     async def _queue_deactivate(self, module: str) -> None:
         async with self._state.lock:
             module_state = self._state.modules[module]
-            module_state.pending_command = "deactivate"
+            module_state.pending_commands.append("deactivate")
             module_state.waiter = None
         await log(self._state, f"deactivating {module}")
 
@@ -103,29 +105,79 @@ async def log(state: AppState, message: str) -> None:
     await broadcast(state, {"type": "log", "message": message})
 
 
+def _validation_error() -> HTTPException:
+    return HTTPException(status_code=400, detail="Code contains unsupported statements")
+
+
+def _module_from_activation(node: ast.stmt) -> str:
+    if not isinstance(node, ast.Expr):
+        raise _validation_error()
+    value = node.value
+    if not isinstance(value, ast.Await):
+        raise _validation_error()
+    call = value.value
+    if not isinstance(call, ast.Call):
+        raise _validation_error()
+    if call.keywords or len(call.args) != 1:
+        raise _validation_error()
+    if not isinstance(call.func, ast.Attribute) or call.func.attr != "activate_and_wait":
+        raise _validation_error()
+    if not isinstance(call.func.value, ast.Name) or call.func.value.id != "rbdr":
+        raise _validation_error()
+    module = call.args[0]
+    if not isinstance(module, ast.Constant) or module.value not in MODULES:
+        raise _validation_error()
+    return module.value
+
+
+def _repeat_count(node: ast.For) -> int:
+    if not isinstance(node.target, ast.Name):
+        raise _validation_error()
+    if node.orelse:
+        raise _validation_error()
+    if not isinstance(node.iter, ast.Call):
+        raise _validation_error()
+    if not isinstance(node.iter.func, ast.Name) or node.iter.func.id != "range":
+        raise _validation_error()
+    if node.iter.keywords or len(node.iter.args) != 1:
+        raise _validation_error()
+    count = node.iter.args[0]
+    if not isinstance(count, ast.Constant) or type(count.value) is not int:
+        raise _validation_error()
+    if count.value < 1 or count.value > MAX_REPEAT_COUNT:
+        raise _validation_error()
+    return count.value
+
+
 def validate_generated_code(code: str) -> list[str]:
-    lines = [line.strip() for line in code.splitlines() if line.strip()]
-    allowed = {
-        'await rbdr.activate_and_wait("button")',
-        'await rbdr.activate_and_wait("rebounder")',
-    }
-    invalid = [line for line in lines if line not in allowed]
-    if invalid:
-        raise HTTPException(status_code=400, detail="Code contains unsupported statements")
-    return lines
+    try:
+        tree = ast.parse(code)
+    except SyntaxError as exc:
+        raise _validation_error() from exc
+
+    actions: list[str] = []
+    for node in tree.body:
+        if isinstance(node, ast.For):
+            count = _repeat_count(node)
+            body = [
+                _module_from_activation(body_node)
+                for body_node in node.body
+                if not isinstance(body_node, ast.Pass)
+            ]
+            actions.extend(body * count)
+        else:
+            actions.append(_module_from_activation(node))
+    return actions
 
 
-async def execute_generated_code(state: AppState, lines: list[str]) -> None:
+async def execute_generated_code(state: AppState, actions: list[str]) -> None:
     rbdr = RbdrRuntime(state)
     try:
         await set_status(state, "running")
-        if not lines:
+        if not actions:
             await log(state, "program is empty")
-        for line in lines:
-            if line.endswith('"button")'):
-                await rbdr.activate_and_wait("button")
-            elif line.endswith('"rebounder")'):
-                await rbdr.activate_and_wait("rebounder")
+        for module in actions:
+            await rbdr.activate_and_wait(module)
         await set_status(state, "idle")
         await log(state, "run complete")
     except asyncio.CancelledError:
@@ -145,7 +197,7 @@ async def clear_pending(state: AppState) -> None:
             if module_state.waiter is not None and not module_state.waiter.done():
                 module_state.waiter.cancel()
             module_state.waiter = None
-            module_state.pending_command = None
+            module_state.pending_commands.clear()
 
 
 def create_app() -> FastAPI:
@@ -162,11 +214,11 @@ def create_app() -> FastAPI:
 
     @app.post("/api/run")
     async def run_program(request: RunRequest) -> dict[str, str]:
-        lines = validate_generated_code(request.code)
+        actions = validate_generated_code(request.code)
         async with state.lock:
             if state.run_task is not None and not state.run_task.done():
                 raise HTTPException(status_code=409, detail="A program is already running")
-            state.run_task = asyncio.create_task(execute_generated_code(state, lines))
+            state.run_task = asyncio.create_task(execute_generated_code(state, actions))
         await asyncio.sleep(0)
         return {"status": "started"}
 
@@ -189,8 +241,7 @@ def create_app() -> FastAPI:
         async with state.lock:
             module_state = state.modules[module]
             module_state.last_poll_at = time.monotonic()
-            command = module_state.pending_command
-            module_state.pending_command = None
+            command = module_state.pending_commands.pop(0) if module_state.pending_commands else None
         if command is None:
             return Response(status_code=204)
         await log(state, f"{module} polled command: {command}")

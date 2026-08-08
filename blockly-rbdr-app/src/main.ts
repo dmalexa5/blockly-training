@@ -1,4 +1,5 @@
 import * as Blockly from 'blockly';
+import 'blockly/blocks';
 import { pythonGenerator } from 'blockly/python';
 import './style.css';
 
@@ -43,6 +44,20 @@ pythonGenerator.forBlock['rbdr_rebounder'] = () => 'await rbdr.activate_and_wait
 const toolbox = {
   kind: 'flyoutToolbox',
   contents: [
+    {
+      kind: 'block',
+      type: 'controls_repeat_ext',
+      inputs: {
+        TIMES: {
+          shadow: {
+            type: 'math_number',
+            fields: {
+              NUM: 3,
+            },
+          },
+        },
+      },
+    },
     { kind: 'block', type: 'rbdr_button' },
     { kind: 'block', type: 'rbdr_rebounder' },
   ],
