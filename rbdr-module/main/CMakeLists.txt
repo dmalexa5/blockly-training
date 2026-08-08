@@ -1,6 +1,6 @@
 idf_component_register(SRCS "main.cpp" "app.cpp"
                        INCLUDE_DIRS "."
-                       REQUIRES cxx esp_driver_i2c esp_event esp_http_client esp_netif esp_timer esp_wifi led_strip nvs_flash)
+                       REQUIRES cxx esp_driver_gpio esp_driver_i2c esp_event esp_http_client esp_netif esp_timer esp_wifi led_strip nvs_flash)
 
 set(RBDR_WIFI_SSID "example-network-name" CACHE STRING "Wi-Fi SSID")
 set(RBDR_WIFI_PASSWORD "example-pwd" CACHE STRING "Wi-Fi password")

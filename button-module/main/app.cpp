@@ -267,6 +267,25 @@ void write_event(const char *event, const char *reason, bool active, bool trigge
     msg.triggered = triggered;
     msg.uptime_ms = uptime_ms();
 
+    if (msg.reason[0] != '\0') {
+        ESP_LOGI(TAG,
+                 "event detected event=%s reason=%s active=%s triggered=%s uptime_ms=%" PRIu32 " wifi_connected=%s",
+                 msg.event,
+                 msg.reason,
+                 msg.active ? "true" : "false",
+                 msg.triggered ? "true" : "false",
+                 msg.uptime_ms,
+                 g_wifi_connected.load() ? "true" : "false");
+    } else {
+        ESP_LOGI(TAG,
+                 "event detected event=%s active=%s triggered=%s uptime_ms=%" PRIu32 " wifi_connected=%s",
+                 msg.event,
+                 msg.active ? "true" : "false",
+                 msg.triggered ? "true" : "false",
+                 msg.uptime_ms,
+                 g_wifi_connected.load() ? "true" : "false");
+    }
+
     xSemaphoreTake(g_send_mutex, portMAX_DELAY);
     g_send_slot = msg;
     g_send_slot_full = true;
@@ -480,6 +499,10 @@ void control_task(void *)
             } else {
                 triggered = true;
                 inactive_flash_until_ms = uptime_ms() + kFlashDurationMs;
+                ESP_LOGI(TAG,
+                         "event detected event=button_press active=false triggered=true uptime_ms=%" PRIu32 " wifi_connected=%s",
+                         state.tstamp_ms,
+                         g_wifi_connected.load() ? "true" : "false");
             }
         }
 
