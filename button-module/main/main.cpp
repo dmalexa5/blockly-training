@@ -2,5 +2,5 @@
 
 extern "C" void app_main(void)
 {
-    rebounder_app_start();
+    button_app_start();
 }

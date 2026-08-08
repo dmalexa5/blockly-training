@@ -68,7 +68,7 @@ constexpr int kDebounceStableMs = 50;
 constexpr int kFlashDurationMs = 1000;
 constexpr EventBits_t kWifiConnectedBit = BIT0;
 
-const char *TAG = "rebounder";
+const char *TAG = "button";
 
 enum class command_t {
     activate,
@@ -153,7 +153,7 @@ bool parse_command(const char *json, command_t *command)
 bool poll_command(command_t *command)
 {
     char url[160];
-    snprintf(url, sizeof(url), "%s/poll", RBDR_SERVER_BASE_URL);
+    snprintf(url, sizeof(url), "%s/poll?module=%s", RBDR_SERVER_BASE_URL, kModuleName);
 
     http_response_t response = {};
     esp_http_client_config_t config = {};
@@ -508,7 +508,7 @@ void control_task(void *)
 
 } // namespace
 
-void rebounder_app_start()
+void button_app_start()
 {
     g_command_queue = xQueueCreate(kCommandQueueLen, sizeof(command_t));
     g_state_mutex = xSemaphoreCreateMutex();

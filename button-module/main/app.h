@@ -1,3 +1,3 @@
 #pragma once
 
-void rebounder_app_start();
+void button_app_start();
