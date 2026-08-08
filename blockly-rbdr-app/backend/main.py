@@ -28,7 +28,8 @@ class ModuleConfig:
 
 
 MODULE_CONFIG = (
-    ModuleConfig(id="button", type="button", label="Button"),
+    ModuleConfig(id="button_left", type="button", label="Left button"),
+    ModuleConfig(id="button_right", type="button", label="Right button"),
     ModuleConfig(id="rebounder", type="rebounder", label="Rebounder"),
 )
 

@@ -28,7 +28,8 @@ type ModuleConfig = {
 };
 
 const defaultModules: ModuleConfig[] = [
-  { id: 'button', type: 'button', label: 'Button' },
+  { id: 'button_left', type: 'button', label: 'Left button' },
+  { id: 'button_right', type: 'button', label: 'Right button' },
   { id: 'rebounder', type: 'rebounder', label: 'Rebounder' },
 ];
 
@@ -123,7 +124,7 @@ function defineBlocks(modules: ModuleConfig[]): void {
 }
 
 pythonGenerator.forBlock['rbdr_button'] = (block) =>
-  `await rbdr.activate_and_wait("${block.getFieldValue('MODULE') ?? 'button'}")\n`;
+  `await rbdr.activate_and_wait("${block.getFieldValue('MODULE') ?? 'button_left'}")\n`;
 pythonGenerator.forBlock['rbdr_rebounder'] = (block) =>
   `await rbdr.activate_and_wait("${block.getFieldValue('MODULE') ?? 'rebounder'}")\n`;
 pythonGenerator.forBlock['rbdr_wait'] = (block) => `await rbdr.wait(${block.getFieldValue('SECONDS')})\n`;

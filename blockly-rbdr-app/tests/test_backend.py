@@ -19,21 +19,21 @@ async def client():
 
 
 async def test_poll_returns_queued_commands(client: httpx.AsyncClient):
-    await client.get("/poll", params={"module": "button"})
-    response = await client.post("/api/run", json={"code": 'await rbdr.activate_and_wait("button")\n'})
+    await client.get("/poll", params={"module": "button_left"})
+    response = await client.post("/api/run", json={"code": 'await rbdr.activate_and_wait("button_left")\n'})
     assert response.status_code == 200
 
-    command = await client.get("/poll", params={"module": "button"})
+    command = await client.get("/poll", params={"module": "button_left"})
     assert command.status_code == 200
     assert command.json() == {"cmd": "activate"}
 
     await client.post(
         "/events",
-        json={"event": "triggered", "module": "button", "active": True, "triggered": True},
+        json={"event": "triggered", "module": "button_left", "active": True, "triggered": True},
     )
     await asyncio.sleep(0)
 
-    deactivate = await client.get("/poll", params={"module": "button"})
+    deactivate = await client.get("/poll", params={"module": "button_left"})
     assert deactivate.status_code == 200
     assert deactivate.json() == {"cmd": "deactivate"}
 
@@ -44,7 +44,8 @@ async def test_modules_api_returns_configured_modules(client: httpx.AsyncClient)
     assert response.status_code == 200
     assert response.json() == {
         "modules": [
-            {"id": "button", "type": "button", "label": "Button"},
+            {"id": "button_left", "type": "button", "label": "Left button"},
+            {"id": "button_right", "type": "button", "label": "Right button"},
             {"id": "rebounder", "type": "rebounder", "label": "Rebounder"},
         ]
     }
@@ -88,7 +89,7 @@ async def test_configured_alternate_module_id_runs_independently(monkeypatch: py
 
 
 async def test_missing_module_connection_fails_fast(client: httpx.AsyncClient):
-    response = await client.post("/api/run", json={"code": 'await rbdr.activate_and_wait("button")\n'})
+    response = await client.post("/api/run", json={"code": 'await rbdr.activate_and_wait("button_left")\n'})
     assert response.status_code == 200
 
     await asyncio.sleep(0)
@@ -97,11 +98,11 @@ async def test_missing_module_connection_fails_fast(client: httpx.AsyncClient):
 
 
 async def test_stale_module_connection_fails_fast(client: httpx.AsyncClient):
-    await client.get("/poll", params={"module": "button"})
+    await client.get("/poll", params={"module": "button_left"})
     app_state = client._transport.app.state.rbdr  # type: ignore[attr-defined]
-    app_state.modules["button"].last_poll_at = time.monotonic() - DEVICE_FRESH_SECONDS - 1
+    app_state.modules["button_left"].last_poll_at = time.monotonic() - DEVICE_FRESH_SECONDS - 1
 
-    response = await client.post("/api/run", json={"code": 'await rbdr.activate_and_wait("button")\n'})
+    response = await client.post("/api/run", json={"code": 'await rbdr.activate_and_wait("button_left")\n'})
     assert response.status_code == 200
 
     await asyncio.sleep(0)
@@ -109,18 +110,18 @@ async def test_stale_module_connection_fails_fast(client: httpx.AsyncClient):
 
 
 async def test_rejects_second_active_run(client: httpx.AsyncClient):
-    await client.get("/poll", params={"module": "button"})
-    first = await client.post("/api/run", json={"code": 'await rbdr.activate_and_wait("button")\n'})
-    second = await client.post("/api/run", json={"code": 'await rbdr.activate_and_wait("button")\n'})
+    await client.get("/poll", params={"module": "button_left"})
+    first = await client.post("/api/run", json={"code": 'await rbdr.activate_and_wait("button_left")\n'})
+    second = await client.post("/api/run", json={"code": 'await rbdr.activate_and_wait("button_left")\n'})
 
     assert first.status_code == 200
     assert second.status_code == 409
 
 
 async def test_wrong_module_event_does_not_complete_wait(client: httpx.AsyncClient):
-    await client.get("/poll", params={"module": "button"})
+    await client.get("/poll", params={"module": "button_left"})
     await client.get("/poll", params={"module": "rebounder"})
-    await client.post("/api/run", json={"code": 'await rbdr.activate_and_wait("button")\n'})
+    await client.post("/api/run", json={"code": 'await rbdr.activate_and_wait("button_left")\n'})
 
     await client.post(
         "/events",
@@ -129,8 +130,8 @@ async def test_wrong_module_event_does_not_complete_wait(client: httpx.AsyncClie
     await asyncio.sleep(0)
 
     app_state = client._transport.app.state.rbdr  # type: ignore[attr-defined]
-    assert app_state.modules["button"].waiter is not None
-    assert not app_state.modules["button"].waiter.done()
+    assert app_state.modules["button_left"].waiter is not None
+    assert not app_state.modules["button_left"].waiter.done()
 
     await client.post("/api/stop")
 
@@ -160,7 +161,7 @@ async def test_wait_program_is_accepted_and_completes(client: httpx.AsyncClient,
 
 
 async def test_wait_before_button_preserves_order(client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch):
-    await client.get("/poll", params={"module": "button"})
+    await client.get("/poll", params={"module": "button_left"})
     sleep_calls: list[float] = []
     original_sleep = asyncio.sleep
 
@@ -172,12 +173,12 @@ async def test_wait_before_button_preserves_order(client: httpx.AsyncClient, mon
 
     response = await client.post(
         "/api/run",
-        json={"code": 'await rbdr.wait(1)\nawait rbdr.activate_and_wait("button")\n'},
+        json={"code": 'await rbdr.wait(1)\nawait rbdr.activate_and_wait("button_left")\n'},
     )
     assert response.status_code == 200
 
     await original_sleep(0)
-    command = await client.get("/poll", params={"module": "button"})
+    command = await client.get("/poll", params={"module": "button_left"})
     assert command.status_code == 200
     assert command.json() == {"cmd": "activate"}
     assert 1 in sleep_calls
@@ -186,68 +187,68 @@ async def test_wait_before_button_preserves_order(client: httpx.AsyncClient, mon
 
 
 async def test_repeat_loop_repeats_button_commands(client: httpx.AsyncClient):
-    await client.get("/poll", params={"module": "button"})
+    await client.get("/poll", params={"module": "button_left"})
     response = await client.post(
         "/api/run",
-        json={"code": 'for count in range(2):\n  await rbdr.activate_and_wait("button")\n'},
+        json={"code": 'for count in range(2):\n  await rbdr.activate_and_wait("button_left")\n'},
     )
     assert response.status_code == 200
 
-    first_activate = await client.get("/poll", params={"module": "button"})
+    first_activate = await client.get("/poll", params={"module": "button_left"})
     assert first_activate.status_code == 200
     assert first_activate.json() == {"cmd": "activate"}
 
     await client.post(
         "/events",
-        json={"event": "triggered", "module": "button", "active": True, "triggered": True},
+        json={"event": "triggered", "module": "button_left", "active": True, "triggered": True},
     )
     await asyncio.sleep(0)
 
-    first_deactivate = await client.get("/poll", params={"module": "button"})
+    first_deactivate = await client.get("/poll", params={"module": "button_left"})
     assert first_deactivate.status_code == 200
     assert first_deactivate.json() == {"cmd": "deactivate"}
 
-    second_activate = await client.get("/poll", params={"module": "button"})
+    second_activate = await client.get("/poll", params={"module": "button_left"})
     assert second_activate.status_code == 200
     assert second_activate.json() == {"cmd": "activate"}
 
     await client.post(
         "/events",
-        json={"event": "triggered", "module": "button", "active": True, "triggered": True},
+        json={"event": "triggered", "module": "button_left", "active": True, "triggered": True},
     )
     await asyncio.sleep(0)
 
-    second_deactivate = await client.get("/poll", params={"module": "button"})
+    second_deactivate = await client.get("/poll", params={"module": "button_left"})
     assert second_deactivate.status_code == 200
     assert second_deactivate.json() == {"cmd": "deactivate"}
 
 
 async def test_repeat_loop_body_can_contain_both_modules(client: httpx.AsyncClient):
-    await client.get("/poll", params={"module": "button"})
+    await client.get("/poll", params={"module": "button_left"})
     await client.get("/poll", params={"module": "rebounder"})
     response = await client.post(
         "/api/run",
         json={
             "code": (
                 'for count in range(2):\n'
-                '  await rbdr.activate_and_wait("button")\n'
+                '  await rbdr.activate_and_wait("button_left")\n'
                 '  await rbdr.activate_and_wait("rebounder")\n'
             ),
         },
     )
     assert response.status_code == 200
 
-    button_activate = await client.get("/poll", params={"module": "button"})
+    button_activate = await client.get("/poll", params={"module": "button_left"})
     assert button_activate.status_code == 200
     assert button_activate.json() == {"cmd": "activate"}
 
     await client.post(
         "/events",
-        json={"event": "triggered", "module": "button", "active": True, "triggered": True},
+        json={"event": "triggered", "module": "button_left", "active": True, "triggered": True},
     )
     await asyncio.sleep(0)
 
-    button_deactivate = await client.get("/poll", params={"module": "button"})
+    button_deactivate = await client.get("/poll", params={"module": "button_left"})
     rebounder_activate = await client.get("/poll", params={"module": "rebounder"})
     assert button_deactivate.status_code == 200
     assert button_deactivate.json() == {"cmd": "deactivate"}
@@ -261,7 +262,7 @@ async def test_repeat_loop_body_can_contain_both_modules(client: httpx.AsyncClie
     await asyncio.sleep(0)
 
     rebounder_deactivate = await client.get("/poll", params={"module": "rebounder"})
-    second_button_activate = await client.get("/poll", params={"module": "button"})
+    second_button_activate = await client.get("/poll", params={"module": "button_left"})
     assert rebounder_deactivate.status_code == 200
     assert rebounder_deactivate.json() == {"cmd": "deactivate"}
     assert second_button_activate.status_code == 200
@@ -299,12 +300,12 @@ async def test_repeat_loop_repeats_waits(client: httpx.AsyncClient, monkeypatch:
 @pytest.mark.parametrize(
     "code",
     [
-        'for count in range(1):\n  for inner in range(1):\n    await rbdr.activate_and_wait("button")\n',
-        'for count in range(0):\n  await rbdr.activate_and_wait("button")\n',
-        'for count in range(21):\n  await rbdr.activate_and_wait("button")\n',
-        'for count in range(1.5):\n  await rbdr.activate_and_wait("button")\n',
-        'for count in range(-1):\n  await rbdr.activate_and_wait("button")\n',
-        'for count in range(times):\n  await rbdr.activate_and_wait("button")\n',
+        'for count in range(1):\n  for inner in range(1):\n    await rbdr.activate_and_wait("button_left")\n',
+        'for count in range(0):\n  await rbdr.activate_and_wait("button_left")\n',
+        'for count in range(21):\n  await rbdr.activate_and_wait("button_left")\n',
+        'for count in range(1.5):\n  await rbdr.activate_and_wait("button_left")\n',
+        'for count in range(-1):\n  await rbdr.activate_and_wait("button_left")\n',
+        'for count in range(times):\n  await rbdr.activate_and_wait("button_left")\n',
         'for count in range(1):\n  print("nope")\n',
     ],
 )
