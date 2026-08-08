@@ -17,6 +17,8 @@ MODULES = {"button", "rebounder"}
 DEVICE_FRESH_SECONDS = 5.0
 DEFAULT_WAIT_SECONDS = 60.0
 MAX_REPEAT_COUNT = 20
+MIN_USER_WAIT_SECONDS = 1
+MAX_USER_WAIT_SECONDS = 10
 
 
 class RunRequest(BaseModel):
@@ -48,9 +50,19 @@ class AppState:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
+@dataclass(frozen=True)
+class ProgramAction:
+    kind: str
+    value: str | int
+
+
 class RbdrRuntime:
     def __init__(self, state: AppState):
         self._state = state
+
+    async def wait(self, seconds: int) -> None:
+        await log(self._state, f"waiting {seconds} seconds")
+        await asyncio.sleep(seconds)
 
     async def activate_and_wait(self, module: str, timeout: float = DEFAULT_WAIT_SECONDS) -> DeviceEvent:
         if module not in MODULES:
@@ -109,7 +121,7 @@ def _validation_error() -> HTTPException:
     return HTTPException(status_code=400, detail="Code contains unsupported statements")
 
 
-def _module_from_activation(node: ast.stmt) -> str:
+def _action_from_statement(node: ast.stmt) -> ProgramAction:
     if not isinstance(node, ast.Expr):
         raise _validation_error()
     value = node.value
@@ -120,14 +132,43 @@ def _module_from_activation(node: ast.stmt) -> str:
         raise _validation_error()
     if call.keywords or len(call.args) != 1:
         raise _validation_error()
-    if not isinstance(call.func, ast.Attribute) or call.func.attr != "activate_and_wait":
+    if not isinstance(call.func, ast.Attribute):
         raise _validation_error()
     if not isinstance(call.func.value, ast.Name) or call.func.value.id != "rbdr":
         raise _validation_error()
-    module = call.args[0]
-    if not isinstance(module, ast.Constant) or module.value not in MODULES:
+
+    if call.func.attr == "activate_and_wait":
+        module = call.args[0]
+        if not isinstance(module, ast.Constant) or module.value not in MODULES:
+            raise _validation_error()
+        return ProgramAction("activate", module.value)
+
+    if call.func.attr == "wait":
+        seconds = call.args[0]
+        if not isinstance(seconds, ast.Constant) or type(seconds.value) is not int:
+            raise _validation_error()
+        if seconds.value < MIN_USER_WAIT_SECONDS or seconds.value > MAX_USER_WAIT_SECONDS:
+            raise _validation_error()
+        return ProgramAction("wait", seconds.value)
+
+    raise _validation_error()
+
+
+def _actions_from_block(nodes: list[ast.stmt]) -> list[ProgramAction]:
+    actions: list[ProgramAction] = []
+    for node in nodes:
+        if isinstance(node, ast.Pass):
+            continue
+        if isinstance(node, ast.For):
+            raise _validation_error()
+        actions.append(_action_from_statement(node))
+    return actions
+
+
+def _module_from_action(action: ProgramAction) -> str:
+    if action.kind != "activate" or not isinstance(action.value, str):
         raise _validation_error()
-    return module.value
+    return action.value
 
 
 def _repeat_count(node: ast.For) -> int:
@@ -149,35 +190,36 @@ def _repeat_count(node: ast.For) -> int:
     return count.value
 
 
-def validate_generated_code(code: str) -> list[str]:
+def validate_generated_code(code: str) -> list[ProgramAction]:
     try:
         tree = ast.parse(code)
     except SyntaxError as exc:
         raise _validation_error() from exc
 
-    actions: list[str] = []
+    actions: list[ProgramAction] = []
     for node in tree.body:
         if isinstance(node, ast.For):
             count = _repeat_count(node)
-            body = [
-                _module_from_activation(body_node)
-                for body_node in node.body
-                if not isinstance(body_node, ast.Pass)
-            ]
+            body = _actions_from_block(node.body)
             actions.extend(body * count)
         else:
-            actions.append(_module_from_activation(node))
+            actions.append(_action_from_statement(node))
     return actions
 
 
-async def execute_generated_code(state: AppState, actions: list[str]) -> None:
+async def execute_generated_code(state: AppState, actions: list[ProgramAction]) -> None:
     rbdr = RbdrRuntime(state)
     try:
         await set_status(state, "running")
         if not actions:
             await log(state, "program is empty")
-        for module in actions:
-            await rbdr.activate_and_wait(module)
+        for action in actions:
+            if action.kind == "wait":
+                if not isinstance(action.value, int):
+                    raise RuntimeError("invalid wait action")
+                await rbdr.wait(action.value)
+            else:
+                await rbdr.activate_and_wait(_module_from_action(action))
         await set_status(state, "idle")
         await log(state, "run complete")
     except asyncio.CancelledError:

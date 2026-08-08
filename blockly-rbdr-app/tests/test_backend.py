@@ -6,6 +6,7 @@ import time
 import httpx
 import pytest
 
+import backend.main as backend_main
 from backend.main import DEVICE_FRESH_SECONDS, create_app
 
 
@@ -88,6 +89,51 @@ async def test_wrong_module_event_does_not_complete_wait(client: httpx.AsyncClie
 async def test_unsupported_generated_code_is_rejected(client: httpx.AsyncClient):
     response = await client.post("/api/run", json={"code": "print('nope')\n"})
     assert response.status_code == 400
+
+
+async def test_wait_program_is_accepted_and_completes(client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch):
+    sleep_calls: list[float] = []
+    original_sleep = asyncio.sleep
+
+    async def immediate_sleep(seconds: float):
+        sleep_calls.append(seconds)
+        await original_sleep(0)
+
+    monkeypatch.setattr(backend_main.asyncio, "sleep", immediate_sleep)
+
+    response = await client.post("/api/run", json={"code": "await rbdr.wait(1)\n"})
+    assert response.status_code == 200
+
+    await original_sleep(0)
+    app_state = client._transport.app.state.rbdr  # type: ignore[attr-defined]
+    assert app_state.status == "idle"
+    assert 1 in sleep_calls
+
+
+async def test_wait_before_button_preserves_order(client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch):
+    await client.get("/poll", params={"module": "button"})
+    sleep_calls: list[float] = []
+    original_sleep = asyncio.sleep
+
+    async def immediate_sleep(seconds: float):
+        sleep_calls.append(seconds)
+        await original_sleep(0)
+
+    monkeypatch.setattr(backend_main.asyncio, "sleep", immediate_sleep)
+
+    response = await client.post(
+        "/api/run",
+        json={"code": 'await rbdr.wait(1)\nawait rbdr.activate_and_wait("button")\n'},
+    )
+    assert response.status_code == 200
+
+    await original_sleep(0)
+    command = await client.get("/poll", params={"module": "button"})
+    assert command.status_code == 200
+    assert command.json() == {"cmd": "activate"}
+    assert 1 in sleep_calls
+
+    await client.post("/api/stop")
 
 
 async def test_repeat_loop_repeats_button_commands(client: httpx.AsyncClient):
@@ -184,6 +230,23 @@ async def test_empty_repeat_loop_is_accepted_and_skipped(client: httpx.AsyncClie
     assert app_state.status == "idle"
 
 
+async def test_repeat_loop_repeats_waits(client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch):
+    sleep_calls: list[float] = []
+    original_sleep = asyncio.sleep
+
+    async def immediate_sleep(seconds: float):
+        sleep_calls.append(seconds)
+        await original_sleep(0)
+
+    monkeypatch.setattr(backend_main.asyncio, "sleep", immediate_sleep)
+
+    response = await client.post("/api/run", json={"code": "for count in range(2):\n  await rbdr.wait(1)\n"})
+    assert response.status_code == 200
+
+    await original_sleep(0)
+    assert sleep_calls.count(1) == 2
+
+
 @pytest.mark.parametrize(
     "code",
     [
@@ -197,5 +260,23 @@ async def test_empty_repeat_loop_is_accepted_and_skipped(client: httpx.AsyncClie
     ],
 )
 async def test_unsupported_repeat_shapes_are_rejected(client: httpx.AsyncClient, code: str):
+    response = await client.post("/api/run", json={"code": code})
+    assert response.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "await rbdr.wait(0)\n",
+        "await rbdr.wait(11)\n",
+        "await rbdr.wait(-1)\n",
+        "await rbdr.wait(1.5)\n",
+        "await rbdr.wait(seconds)\n",
+        "await rbdr.wait(seconds=1)\n",
+        "await rbdr.wait(1, 2)\n",
+        "await rbdr.sleep(1)\n",
+    ],
+)
+async def test_unsupported_wait_shapes_are_rejected(client: httpx.AsyncClient, code: str):
     response = await client.post("/api/run", json={"code": code})
     assert response.status_code == 400

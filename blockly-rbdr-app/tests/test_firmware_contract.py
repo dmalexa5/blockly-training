@@ -35,6 +35,25 @@ def test_button_firmware_identity_names_are_not_rebounder():
         assert "rebounder" not in read_button_module(relative_path)
 
 
+def test_button_firmware_configures_active_low_pullup_gpio():
+    source = read_button_module("main/app.cpp")
+    cmake = read_button_module("main/CMakeLists.txt")
+
+    assert 'set(RBDR_BUTTON_GPIO 4 CACHE STRING "INPUT_PULLUP button GPIO")' in cmake
+    assert "io_conf.mode = GPIO_MODE_INPUT;" in source
+    assert "io_conf.pull_up_en = GPIO_PULLUP_ENABLE;" in source
+    assert "io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;" in source
+    assert "gpio_get_level(static_cast<gpio_num_t>(RBDR_BUTTON_GPIO)) == 0" in source
+    assert "wiring=GPIO%d-to-GND" in source
+
+
+def test_button_firmware_logs_button_press_and_release_transitions():
+    source = read_button_module("main/app.cpp")
+
+    assert '"button transition event=%s gpio=%d raw_level=%d pressed=%s uptime_ms=%" PRIu32' in source
+    assert 'fell ? "button_press" : "button_release"' in source
+
+
 def test_rebounder_firmware_exists_as_independent_project():
     expected_files = [
         "CMakeLists.txt",
@@ -81,3 +100,10 @@ def test_rebounder_firmware_acceleration_config_defaults():
     assert "set(RBDR_MPU_SDA_GPIO 8 " in cmake
     assert "set(RBDR_MPU_SCL_GPIO 9 " in cmake
     assert "set(RBDR_MPU_I2C_ADDR 0x68 " in cmake
+
+
+def test_rebounder_firmware_latches_edge_until_control_task_consumes_it():
+    source = read_rbdr_module("main/app.cpp")
+
+    assert "state.rising_edge = state.rising_edge || g_latest_state.rising_edge;" in source
+    assert "g_latest_state.rising_edge = false;" in source

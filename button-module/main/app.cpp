@@ -382,6 +382,11 @@ void init_button()
     io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
     io_conf.intr_type = GPIO_INTR_DISABLE;
     ESP_ERROR_CHECK(gpio_config(&io_conf));
+
+    ESP_LOGI(TAG,
+             "button gpio configured gpio=%d mode=input pullup=enabled pulldown=disabled active_low=true wiring=GPIO%d-to-GND",
+             RBDR_BUTTON_GPIO,
+             RBDR_BUTTON_GPIO);
 }
 
 void init_led()
@@ -445,6 +450,13 @@ void sense_task(void *)
             fell = raw_pressed;
             rose = !raw_pressed;
             debounced_pressed = raw_pressed;
+            ESP_LOGI(TAG,
+                     "button transition event=%s gpio=%d raw_level=%d pressed=%s uptime_ms=%" PRIu32,
+                     fell ? "button_press" : "button_release",
+                     RBDR_BUTTON_GPIO,
+                     raw_pressed ? 0 : 1,
+                     debounced_pressed ? "true" : "false",
+                     uptime_ms());
         }
 
         mod_state_t state = {};
@@ -454,6 +466,8 @@ void sense_task(void *)
         state.tstamp_ms = uptime_ms();
 
         xSemaphoreTake(g_state_mutex, portMAX_DELAY);
+        state.fell = state.fell || g_latest_state.fell;
+        state.rose = state.rose || g_latest_state.rose;
         g_latest_state = state;
         xSemaphoreGive(g_state_mutex);
 
@@ -488,6 +502,8 @@ void control_task(void *)
         mod_state_t state = {};
         xSemaphoreTake(g_state_mutex, portMAX_DELAY);
         state = g_latest_state;
+        g_latest_state.fell = false;
+        g_latest_state.rose = false;
         xSemaphoreGive(g_state_mutex);
 
         if (state.fell) {

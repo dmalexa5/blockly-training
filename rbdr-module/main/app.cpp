@@ -658,6 +658,7 @@ void sense_task(void *)
         state.tstamp_ms = now_ms;
 
         xSemaphoreTake(g_state_mutex, portMAX_DELAY);
+        state.rising_edge = state.rising_edge || g_latest_state.rising_edge;
         g_latest_state = state;
         xSemaphoreGive(g_state_mutex);
 
@@ -700,6 +701,7 @@ void control_task(void *)
         mod_state_t state = {};
         xSemaphoreTake(g_state_mutex, portMAX_DELAY);
         state = g_latest_state;
+        g_latest_state.rising_edge = false;
         xSemaphoreGive(g_state_mutex);
 
         const uint32_t now_ms = uptime_ms();

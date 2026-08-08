@@ -38,8 +38,22 @@ Blockly.Blocks['rbdr_rebounder'] = {
   },
 };
 
+Blockly.Blocks['rbdr_wait'] = {
+  init() {
+    this.appendDummyInput()
+      .appendField('wait')
+      .appendField(new Blockly.FieldNumber(1, 1, 10, 1), 'SECONDS')
+      .appendField('seconds');
+    this.setPreviousStatement(true, null);
+    this.setNextStatement(true, null);
+    this.setColour(60);
+    this.setTooltip('Wait for 1 to 10 seconds before continuing.');
+  },
+};
+
 pythonGenerator.forBlock['rbdr_button'] = () => 'await rbdr.activate_and_wait("button")\n';
 pythonGenerator.forBlock['rbdr_rebounder'] = () => 'await rbdr.activate_and_wait("rebounder")\n';
+pythonGenerator.forBlock['rbdr_wait'] = (block) => `await rbdr.wait(${block.getFieldValue('SECONDS')})\n`;
 
 const toolbox = {
   kind: 'flyoutToolbox',
@@ -60,6 +74,7 @@ const toolbox = {
     },
     { kind: 'block', type: 'rbdr_button' },
     { kind: 'block', type: 'rbdr_rebounder' },
+    { kind: 'block', type: 'rbdr_wait' },
   ],
 };
 
@@ -70,7 +85,7 @@ const workspace = Blockly.inject(blocklyArea, {
 
 function generateCode(): string {
   const code = pythonGenerator.workspaceToCode(workspace);
-  codeOutput.textContent = code || '# Add button or rebounder blocks, then run.\n';
+  codeOutput.textContent = code || '# Add button, rebounder, or wait blocks, then run.\n';
   return code;
 }
 
