@@ -38,6 +38,55 @@ async def test_poll_returns_queued_commands(client: httpx.AsyncClient):
     assert deactivate.json() == {"cmd": "deactivate"}
 
 
+async def test_modules_api_returns_configured_modules(client: httpx.AsyncClient):
+    response = await client.get("/api/modules")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "modules": [
+            {"id": "button", "type": "button", "label": "Button"},
+            {"id": "rebounder", "type": "rebounder", "label": "Rebounder"},
+        ]
+    }
+
+
+async def test_configured_alternate_module_id_runs_independently(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        backend_main,
+        "MODULE_CONFIG",
+        (
+            backend_main.ModuleConfig(id="button_left", type="button", label="Left button"),
+            backend_main.ModuleConfig(id="button_right", type="button", label="Right button"),
+        ),
+    )
+    app = create_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.get("/poll", params={"module": "button_left"})
+        await client.get("/poll", params={"module": "button_right"})
+        response = await client.post(
+            "/api/run",
+            json={"code": 'await rbdr.activate_and_wait("button_right")\n'},
+        )
+        assert response.status_code == 200
+
+        left_command = await client.get("/poll", params={"module": "button_left"})
+        right_command = await client.get("/poll", params={"module": "button_right"})
+        assert left_command.status_code == 204
+        assert right_command.status_code == 200
+        assert right_command.json() == {"cmd": "activate"}
+
+        await client.post(
+            "/events",
+            json={"event": "triggered", "module": "button_right", "active": True, "triggered": True},
+        )
+        await asyncio.sleep(0)
+
+        deactivate = await client.get("/poll", params={"module": "button_right"})
+        assert deactivate.status_code == 200
+        assert deactivate.json() == {"cmd": "deactivate"}
+
+
 async def test_missing_module_connection_fails_fast(client: httpx.AsyncClient):
     response = await client.post("/api/run", json={"code": 'await rbdr.activate_and_wait("button")\n'})
     assert response.status_code == 200

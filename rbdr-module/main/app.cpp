@@ -37,6 +37,10 @@
 #define RBDR_SERVER_BASE_URL "http://192.168.4.1"
 #endif
 
+#ifndef RBDR_MODULE_NAME
+#define RBDR_MODULE_NAME "rebounder"
+#endif
+
 #ifndef RBDR_LED_GPIO
 #define RBDR_LED_GPIO 48
 #endif
@@ -90,7 +94,7 @@ static_assert(RBDR_ACCEL_EMA_ALPHA > 0.0f && RBDR_ACCEL_EMA_ALPHA <= 1.0f,
 
 namespace {
 
-constexpr char kModuleName[] = "rebounder";
+constexpr char kModuleName[] = RBDR_MODULE_NAME;
 constexpr int kCommandQueueLen = 8;
 constexpr int kHttpTimeoutMs = 1000;
 constexpr int kFlashDurationMs = 1000;

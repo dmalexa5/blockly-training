@@ -35,6 +35,10 @@
 #define RBDR_SERVER_BASE_URL "http://192.168.4.1"
 #endif
 
+#ifndef RBDR_MODULE_NAME
+#define RBDR_MODULE_NAME "button"
+#endif
+
 #ifndef RBDR_BUTTON_GPIO
 #define RBDR_BUTTON_GPIO 4
 #endif
@@ -61,7 +65,7 @@
 
 namespace {
 
-constexpr char kModuleName[] = "button";
+constexpr char kModuleName[] = RBDR_MODULE_NAME;
 constexpr int kCommandQueueLen = 8;
 constexpr int kHttpTimeoutMs = 1000;
 constexpr int kDebounceStableMs = 50;

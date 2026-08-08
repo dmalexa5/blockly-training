@@ -19,8 +19,17 @@ def read_rbdr_module(path: str) -> str:
 def test_button_firmware_polls_with_module_query():
     source = read_button_module("main/app.cpp")
 
-    assert 'constexpr char kModuleName[] = "button";' in source
+    assert 'constexpr char kModuleName[] = RBDR_MODULE_NAME;' in source
     assert '"%s/poll?module=%s", RBDR_SERVER_BASE_URL, kModuleName' in source
+
+
+def test_button_firmware_module_name_is_build_configurable():
+    source = read_button_module("main/app.cpp")
+    cmake = read_button_module("main/CMakeLists.txt")
+
+    assert '#define RBDR_MODULE_NAME "button"' in source
+    assert 'set(RBDR_MODULE_NAME "button" CACHE STRING "Logical module ID reported to the backend")' in cmake
+    assert 'RBDR_MODULE_NAME="${RBDR_MODULE_NAME}"' in cmake
 
 
 def test_button_firmware_identity_names_are_not_rebounder():
@@ -76,8 +85,17 @@ def test_rebounder_firmware_exists_as_independent_project():
 def test_rebounder_firmware_polls_with_module_query():
     source = read_rbdr_module("main/app.cpp")
 
-    assert 'constexpr char kModuleName[] = "rebounder";' in source
+    assert 'constexpr char kModuleName[] = RBDR_MODULE_NAME;' in source
     assert '"%s/poll?module=%s", RBDR_SERVER_BASE_URL, kModuleName' in source
+
+
+def test_rebounder_firmware_module_name_is_build_configurable():
+    source = read_rbdr_module("main/app.cpp")
+    cmake = read_rbdr_module("main/CMakeLists.txt")
+
+    assert '#define RBDR_MODULE_NAME "rebounder"' in source
+    assert 'set(RBDR_MODULE_NAME "rebounder" CACHE STRING "Logical module ID reported to the backend")' in cmake
+    assert 'RBDR_MODULE_NAME="${RBDR_MODULE_NAME}"' in cmake
 
 
 def test_rebounder_firmware_identity_names_are_not_button():

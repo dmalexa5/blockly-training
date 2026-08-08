@@ -19,6 +19,7 @@ cd rbdr-module
 idf.py -DRBDR_WIFI_SSID="your-ssid" \
   -DRBDR_WIFI_PASSWORD="your-password" \
   -DRBDR_SERVER_BASE_URL="http://COMPUTER_WIFI_IP:8000" \
+  -DRBDR_MODULE_NAME="button_left" \
   build
 ```
 

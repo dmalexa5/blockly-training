@@ -13,12 +13,28 @@ from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-MODULES = {"button", "rebounder"}
 DEVICE_FRESH_SECONDS = 5.0
 DEFAULT_WAIT_SECONDS = 60.0
 MAX_REPEAT_COUNT = 20
 MIN_USER_WAIT_SECONDS = 1
 MAX_USER_WAIT_SECONDS = 10
+
+
+@dataclass(frozen=True)
+class ModuleConfig:
+    id: str
+    type: str
+    label: str
+
+
+MODULE_CONFIG = (
+    ModuleConfig(id="button", type="button", label="Button"),
+    ModuleConfig(id="rebounder", type="rebounder", label="Rebounder"),
+)
+
+
+def module_ids() -> set[str]:
+    return {module.id for module in MODULE_CONFIG}
 
 
 class RunRequest(BaseModel):
@@ -43,7 +59,7 @@ class ModuleState:
 
 @dataclass
 class AppState:
-    modules: dict[str, ModuleState] = field(default_factory=lambda: {name: ModuleState() for name in MODULES})
+    modules: dict[str, ModuleState] = field(default_factory=lambda: {name: ModuleState() for name in module_ids()})
     websockets: set[WebSocket] = field(default_factory=set)
     run_task: asyncio.Task[None] | None = None
     status: str = "idle"
@@ -65,7 +81,7 @@ class RbdrRuntime:
         await asyncio.sleep(seconds)
 
     async def activate_and_wait(self, module: str, timeout: float = DEFAULT_WAIT_SECONDS) -> DeviceEvent:
-        if module not in MODULES:
+        if module not in module_ids():
             raise RuntimeError(f"unknown module: {module}")
 
         await log(self._state, f"activating {module}")
@@ -139,7 +155,7 @@ def _action_from_statement(node: ast.stmt) -> ProgramAction:
 
     if call.func.attr == "activate_and_wait":
         module = call.args[0]
-        if not isinstance(module, ast.Constant) or module.value not in MODULES:
+        if not isinstance(module, ast.Constant) or module.value not in module_ids():
             raise _validation_error()
         return ProgramAction("activate", module.value)
 
@@ -276,9 +292,18 @@ def create_app() -> FastAPI:
             await set_status(state, "idle")
         return {"status": "stopped"}
 
+    @app.get("/api/modules")
+    async def list_modules() -> dict[str, list[dict[str, str]]]:
+        return {
+            "modules": [
+                {"id": module.id, "type": module.type, "label": module.label}
+                for module in MODULE_CONFIG
+            ]
+        }
+
     @app.get("/poll", response_model=None)
     async def poll(module: str):
-        if module not in MODULES:
+        if module not in module_ids():
             raise HTTPException(status_code=404, detail="Unknown module")
         async with state.lock:
             module_state = state.modules[module]
@@ -291,7 +316,7 @@ def create_app() -> FastAPI:
 
     @app.post("/events")
     async def receive_event(event: DeviceEvent) -> dict[str, str]:
-        if event.module not in MODULES:
+        if event.module not in module_ids():
             raise HTTPException(status_code=404, detail="Unknown module")
         await log(state, f"{event.module} event: {event.event}")
         async with state.lock:

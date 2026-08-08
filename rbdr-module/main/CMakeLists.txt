@@ -5,6 +5,7 @@ idf_component_register(SRCS "main.cpp" "app.cpp"
 set(RBDR_WIFI_SSID "example-network-name" CACHE STRING "Wi-Fi SSID")
 set(RBDR_WIFI_PASSWORD "example-pwd" CACHE STRING "Wi-Fi password")
 set(RBDR_SERVER_BASE_URL "http://192.168.4.1" CACHE STRING "HTTP server base URL")
+set(RBDR_MODULE_NAME "rebounder" CACHE STRING "Logical module ID reported to the backend")
 set(RBDR_LED_GPIO 48 CACHE STRING "LED strip GPIO")
 set(RBDR_LED_COUNT 1 CACHE STRING "LED count")
 set(RBDR_COMMS_PERIOD_MS 50 CACHE STRING "Comms task period in milliseconds")
@@ -22,6 +23,7 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
     RBDR_WIFI_SSID="${RBDR_WIFI_SSID}"
     RBDR_WIFI_PASSWORD="${RBDR_WIFI_PASSWORD}"
     RBDR_SERVER_BASE_URL="${RBDR_SERVER_BASE_URL}"
+    RBDR_MODULE_NAME="${RBDR_MODULE_NAME}"
     RBDR_LED_GPIO=${RBDR_LED_GPIO}
     RBDR_LED_COUNT=${RBDR_LED_COUNT}
     RBDR_COMMS_PERIOD_MS=${RBDR_COMMS_PERIOD_MS}

@@ -29,3 +29,11 @@ For local development, open the Vite URL. Vite proxies backend requests to `http
 ```json
 {"event":"triggered","module":"button","active":true,"triggered":true,"uptime_ms":1234}
 ```
+
+Module names are logical IDs configured in the backend module list. To flash two physical
+button modules, build the same firmware with different IDs, for example:
+
+```sh
+idf.py -DRBDR_MODULE_NAME=button_left build flash
+idf.py -DRBDR_MODULE_NAME=button_right build flash
+```
