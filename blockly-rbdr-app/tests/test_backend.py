@@ -1,44 +1,60 @@
 from __future__ import annotations
 
 import asyncio
-import time
+import json
 
 import httpx
 import pytest
 
 import backend.main as backend_main
-from backend.main import DEVICE_FRESH_SECONDS, create_app
+from backend.main import create_app
+
+
+class DeviceMock:
+    def __init__(self):
+        self.commands: list[tuple[str, str]] = []
+        self.health_status = 200
+        self.command_status = 202
+
+    async def __call__(self, request: httpx.Request) -> httpx.Response:
+        module = request.url.host.split(".", 1)[0].replace("-", "_")
+        if request.url.path == "/health":
+            if self.health_status != 200:
+                return httpx.Response(self.health_status)
+            module_type = "rebounder" if module == "rebounder" else "button"
+            return httpx.Response(200, json={"module": module, "type": module_type})
+        if request.url.path == "/command":
+            cmd = json.loads(request.content)["cmd"]
+            self.commands.append((module, cmd))
+            return httpx.Response(self.command_status)
+        return httpx.Response(404)
 
 
 @pytest.fixture
-async def client():
+async def client(monkeypatch: pytest.MonkeyPatch):
+    device = DeviceMock()
+    monkeypatch.setattr(backend_main, "DEVICE_TRANSPORT", httpx.MockTransport(device))
     app = create_app()
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as async_client:
+        async_client.device = device  # type: ignore[attr-defined]
         yield async_client
 
 
-async def test_poll_returns_queued_commands(client: httpx.AsyncClient):
-    await client.get("/poll", params={"module": "button_left"})
+async def test_backend_checks_health_then_posts_activate_and_deactivate(client: httpx.AsyncClient):
     response = await client.post("/api/run", json={"code": 'await rbdr.activate_and_wait("button_left")\n'})
     assert response.status_code == 200
-
-    command = await client.get("/poll", params={"module": "button_left"})
-    assert command.status_code == 200
-    assert command.json() == {"cmd": "activate"}
-
-    await client.post(
-        "/events",
-        json={"event": "triggered", "module": "button_left", "active": True, "triggered": True},
-    )
     await asyncio.sleep(0)
 
-    deactivate = await client.get("/poll", params={"module": "button_left"})
-    assert deactivate.status_code == 200
-    assert deactivate.json() == {"cmd": "deactivate"}
+    assert client.device.commands == [("button_left", "activate")]  # type: ignore[attr-defined]
+
+    await client.post("/events", json={"event": "triggered", "module": "button_left"})
+    await asyncio.sleep(0)
+
+    assert client.device.commands == [("button_left", "activate"), ("button_left", "deactivate")]  # type: ignore[attr-defined]
 
 
-async def test_modules_api_returns_configured_modules(client: httpx.AsyncClient):
+async def test_modules_api_returns_configured_modules_without_device_urls(client: httpx.AsyncClient):
     response = await client.get("/api/modules")
 
     assert response.status_code == 200
@@ -56,39 +72,42 @@ async def test_configured_alternate_module_id_runs_independently(monkeypatch: py
         backend_main,
         "MODULE_CONFIG",
         (
-            backend_main.ModuleConfig(id="button_left", type="button", label="Left button"),
-            backend_main.ModuleConfig(id="button_right", type="button", label="Right button"),
+            backend_main.ModuleConfig(
+                id="button_left",
+                type="button",
+                label="Left button",
+                base_url="http://button-left.local",
+            ),
+            backend_main.ModuleConfig(
+                id="button_right",
+                type="button",
+                label="Right button",
+                base_url="http://button-right.local",
+            ),
         ),
     )
+    device = DeviceMock()
+    monkeypatch.setattr(backend_main, "DEVICE_TRANSPORT", httpx.MockTransport(device))
     app = create_app()
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        await client.get("/poll", params={"module": "button_left"})
-        await client.get("/poll", params={"module": "button_right"})
         response = await client.post(
             "/api/run",
             json={"code": 'await rbdr.activate_and_wait("button_right")\n'},
         )
         assert response.status_code == 200
-
-        left_command = await client.get("/poll", params={"module": "button_left"})
-        right_command = await client.get("/poll", params={"module": "button_right"})
-        assert left_command.status_code == 204
-        assert right_command.status_code == 200
-        assert right_command.json() == {"cmd": "activate"}
-
-        await client.post(
-            "/events",
-            json={"event": "triggered", "module": "button_right", "active": True, "triggered": True},
-        )
         await asyncio.sleep(0)
 
-        deactivate = await client.get("/poll", params={"module": "button_right"})
-        assert deactivate.status_code == 200
-        assert deactivate.json() == {"cmd": "deactivate"}
+        assert device.commands == [("button_right", "activate")]
+
+        await client.post("/events", json={"event": "triggered", "module": "button_right"})
+        await asyncio.sleep(0)
+        assert device.commands == [("button_right", "activate"), ("button_right", "deactivate")]
 
 
-async def test_missing_module_connection_fails_fast(client: httpx.AsyncClient):
+async def test_failed_health_check_marks_run_error(client: httpx.AsyncClient):
+    client.device.health_status = 503  # type: ignore[attr-defined]
+
     response = await client.post("/api/run", json={"code": 'await rbdr.activate_and_wait("button_left")\n'})
     assert response.status_code == 200
 
@@ -97,36 +116,32 @@ async def test_missing_module_connection_fails_fast(client: httpx.AsyncClient):
     assert app_state.status == "error"
 
 
-async def test_stale_module_connection_fails_fast(client: httpx.AsyncClient):
-    await client.get("/poll", params={"module": "button_left"})
-    app_state = client._transport.app.state.rbdr  # type: ignore[attr-defined]
-    app_state.modules["button_left"].last_poll_at = time.monotonic() - DEVICE_FRESH_SECONDS - 1
+async def test_device_busy_409_is_surfaced_as_error(client: httpx.AsyncClient):
+    client.device.command_status = 409  # type: ignore[attr-defined]
 
     response = await client.post("/api/run", json={"code": 'await rbdr.activate_and_wait("button_left")\n'})
     assert response.status_code == 200
 
     await asyncio.sleep(0)
+    app_state = client._transport.app.state.rbdr  # type: ignore[attr-defined]
     assert app_state.status == "error"
 
 
 async def test_rejects_second_active_run(client: httpx.AsyncClient):
-    await client.get("/poll", params={"module": "button_left"})
     first = await client.post("/api/run", json={"code": 'await rbdr.activate_and_wait("button_left")\n'})
     second = await client.post("/api/run", json={"code": 'await rbdr.activate_and_wait("button_left")\n'})
 
     assert first.status_code == 200
     assert second.status_code == 409
 
+    await client.post("/api/stop")
+
 
 async def test_wrong_module_event_does_not_complete_wait(client: httpx.AsyncClient):
-    await client.get("/poll", params={"module": "button_left"})
-    await client.get("/poll", params={"module": "rebounder"})
     await client.post("/api/run", json={"code": 'await rbdr.activate_and_wait("button_left")\n'})
+    await asyncio.sleep(0)
 
-    await client.post(
-        "/events",
-        json={"event": "triggered", "module": "rebounder", "active": True, "triggered": True},
-    )
+    await client.post("/events", json={"event": "triggered", "module": "rebounder"})
     await asyncio.sleep(0)
 
     app_state = client._transport.app.state.rbdr  # type: ignore[attr-defined]
@@ -161,7 +176,6 @@ async def test_wait_program_is_accepted_and_completes(client: httpx.AsyncClient,
 
 
 async def test_wait_before_button_preserves_order(client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch):
-    await client.get("/poll", params={"module": "button_left"})
     sleep_calls: list[float] = []
     original_sleep = asyncio.sleep
 
@@ -178,54 +192,44 @@ async def test_wait_before_button_preserves_order(client: httpx.AsyncClient, mon
     assert response.status_code == 200
 
     await original_sleep(0)
-    command = await client.get("/poll", params={"module": "button_left"})
-    assert command.status_code == 200
-    assert command.json() == {"cmd": "activate"}
     assert 1 in sleep_calls
+    assert client.device.commands == [("button_left", "activate")]  # type: ignore[attr-defined]
 
     await client.post("/api/stop")
 
 
 async def test_repeat_loop_repeats_button_commands(client: httpx.AsyncClient):
-    await client.get("/poll", params={"module": "button_left"})
     response = await client.post(
         "/api/run",
         json={"code": 'for count in range(2):\n  await rbdr.activate_and_wait("button_left")\n'},
     )
     assert response.status_code == 200
-
-    first_activate = await client.get("/poll", params={"module": "button_left"})
-    assert first_activate.status_code == 200
-    assert first_activate.json() == {"cmd": "activate"}
-
-    await client.post(
-        "/events",
-        json={"event": "triggered", "module": "button_left", "active": True, "triggered": True},
-    )
     await asyncio.sleep(0)
 
-    first_deactivate = await client.get("/poll", params={"module": "button_left"})
-    assert first_deactivate.status_code == 200
-    assert first_deactivate.json() == {"cmd": "deactivate"}
+    assert client.device.commands == [("button_left", "activate")]  # type: ignore[attr-defined]
 
-    second_activate = await client.get("/poll", params={"module": "button_left"})
-    assert second_activate.status_code == 200
-    assert second_activate.json() == {"cmd": "activate"}
-
-    await client.post(
-        "/events",
-        json={"event": "triggered", "module": "button_left", "active": True, "triggered": True},
-    )
+    await client.post("/events", json={"event": "triggered", "module": "button_left"})
+    await asyncio.sleep(0)
     await asyncio.sleep(0)
 
-    second_deactivate = await client.get("/poll", params={"module": "button_left"})
-    assert second_deactivate.status_code == 200
-    assert second_deactivate.json() == {"cmd": "deactivate"}
+    assert client.device.commands == [  # type: ignore[attr-defined]
+        ("button_left", "activate"),
+        ("button_left", "deactivate"),
+        ("button_left", "activate"),
+    ]
+
+    await client.post("/events", json={"event": "triggered", "module": "button_left"})
+    await asyncio.sleep(0)
+
+    assert client.device.commands == [  # type: ignore[attr-defined]
+        ("button_left", "activate"),
+        ("button_left", "deactivate"),
+        ("button_left", "activate"),
+        ("button_left", "deactivate"),
+    ]
 
 
 async def test_repeat_loop_body_can_contain_both_modules(client: httpx.AsyncClient):
-    await client.get("/poll", params={"module": "button_left"})
-    await client.get("/poll", params={"module": "rebounder"})
     response = await client.post(
         "/api/run",
         json={
@@ -237,36 +241,25 @@ async def test_repeat_loop_body_can_contain_both_modules(client: httpx.AsyncClie
         },
     )
     assert response.status_code == 200
-
-    button_activate = await client.get("/poll", params={"module": "button_left"})
-    assert button_activate.status_code == 200
-    assert button_activate.json() == {"cmd": "activate"}
-
-    await client.post(
-        "/events",
-        json={"event": "triggered", "module": "button_left", "active": True, "triggered": True},
-    )
     await asyncio.sleep(0)
 
-    button_deactivate = await client.get("/poll", params={"module": "button_left"})
-    rebounder_activate = await client.get("/poll", params={"module": "rebounder"})
-    assert button_deactivate.status_code == 200
-    assert button_deactivate.json() == {"cmd": "deactivate"}
-    assert rebounder_activate.status_code == 200
-    assert rebounder_activate.json() == {"cmd": "activate"}
+    assert client.device.commands == [("button_left", "activate")]  # type: ignore[attr-defined]
 
-    await client.post(
-        "/events",
-        json={"event": "triggered", "module": "rebounder", "active": True, "triggered": True},
-    )
+    await client.post("/events", json={"event": "triggered", "module": "button_left"})
+    await asyncio.sleep(0)
     await asyncio.sleep(0)
 
-    rebounder_deactivate = await client.get("/poll", params={"module": "rebounder"})
-    second_button_activate = await client.get("/poll", params={"module": "button_left"})
-    assert rebounder_deactivate.status_code == 200
-    assert rebounder_deactivate.json() == {"cmd": "deactivate"}
-    assert second_button_activate.status_code == 200
-    assert second_button_activate.json() == {"cmd": "activate"}
+    assert client.device.commands == [  # type: ignore[attr-defined]
+        ("button_left", "activate"),
+        ("button_left", "deactivate"),
+        ("rebounder", "activate"),
+    ]
+
+    await client.post("/events", json={"event": "triggered", "module": "rebounder"})
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert client.device.commands[-2:] == [("rebounder", "deactivate"), ("button_left", "activate")]  # type: ignore[attr-defined]
 
     await client.post("/api/stop")
 

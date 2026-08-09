@@ -15,11 +15,12 @@ npm run dev -- --open
 Build with critical options configured:
 
 ```sh
-cd rbdr-module
-idf.py -DRBDR_WIFI_SSID="your-ssid" \
-  -DRBDR_WIFI_PASSWORD="your-password" \
-  -DRBDR_SERVER_BASE_URL="http://COMPUTER_WIFI_IP:8000" \
-  -DRBDR_MODULE_NAME="button_left" \
+cd module
+idf.py -DMODULE_TYPE=button \
+  -DMODULE_NAME="button_left" \
+  -DWIFI_SSID="your-ssid" \
+  -DWIFI_PASSWORD="your-password" \
+  -DSERVER_BASE_URL="http://COMPUTER_WIFI_IP:8000" \
   build
 ```
 

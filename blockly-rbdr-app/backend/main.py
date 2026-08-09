@@ -3,21 +3,21 @@ from __future__ import annotations
 import ast
 import asyncio
 import contextlib
-import time
 from dataclasses import dataclass, field
 from typing import Any
 
+import httpx
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-DEVICE_FRESH_SECONDS = 5.0
 DEFAULT_WAIT_SECONDS = 60.0
+DEVICE_TIMEOUT_SECONDS = 2.0
 MAX_REPEAT_COUNT = 20
 MIN_USER_WAIT_SECONDS = 1
 MAX_USER_WAIT_SECONDS = 10
+DEVICE_TRANSPORT: httpx.AsyncBaseTransport | None = None
 
 
 @dataclass(frozen=True)
@@ -25,17 +25,25 @@ class ModuleConfig:
     id: str
     type: str
     label: str
+    base_url: str
 
 
 MODULE_CONFIG = (
-    ModuleConfig(id="button_left", type="button", label="Left button"),
-    ModuleConfig(id="button_right", type="button", label="Right button"),
-    ModuleConfig(id="rebounder", type="rebounder", label="Rebounder"),
+    ModuleConfig(id="button_left", type="button", label="Left button", base_url="http://button-left.local"),
+    ModuleConfig(id="button_right", type="button", label="Right button", base_url="http://button-right.local"),
+    ModuleConfig(id="rebounder", type="rebounder", label="Rebounder", base_url="http://rebounder.local"),
 )
 
 
 def module_ids() -> set[str]:
     return {module.id for module in MODULE_CONFIG}
+
+
+def module_config(module_id: str) -> ModuleConfig:
+    for module in MODULE_CONFIG:
+        if module.id == module_id:
+            return module
+    raise RuntimeError(f"unknown module: {module_id}")
 
 
 class RunRequest(BaseModel):
@@ -45,16 +53,10 @@ class RunRequest(BaseModel):
 class DeviceEvent(BaseModel):
     event: str
     module: str
-    active: bool | None = None
-    triggered: bool | None = None
-    uptime_ms: int | None = None
-    reason: str | None = None
 
 
 @dataclass
 class ModuleState:
-    last_poll_at: float | None = None
-    pending_commands: list[str] = field(default_factory=list)
     waiter: asyncio.Future[DeviceEvent] | None = None
 
 
@@ -86,18 +88,23 @@ class RbdrRuntime:
             raise RuntimeError(f"unknown module: {module}")
 
         await log(self._state, f"activating {module}")
+        config = module_config(module)
         async with self._state.lock:
             module_state = self._state.modules[module]
-            now = time.monotonic()
-            if module_state.last_poll_at is None or now - module_state.last_poll_at > DEVICE_FRESH_SECONDS:
-                raise RuntimeError(f"{module} module is not connected")
             if module_state.waiter is not None and not module_state.waiter.done():
                 raise RuntimeError(f"{module} module already has a pending activation")
 
             loop = asyncio.get_running_loop()
             module_state.waiter = loop.create_future()
-            module_state.pending_commands.append("activate")
             waiter = module_state.waiter
+
+        try:
+            await send_device_command(config, "activate")
+        except Exception:
+            async with self._state.lock:
+                if module_state.waiter is waiter:
+                    module_state.waiter = None
+            raise
 
         try:
             event = await asyncio.wait_for(waiter, timeout=timeout)
@@ -107,11 +114,32 @@ class RbdrRuntime:
             await self._queue_deactivate(module)
 
     async def _queue_deactivate(self, module: str) -> None:
+        config = module_config(module)
+        await send_device_command(config, "deactivate")
         async with self._state.lock:
             module_state = self._state.modules[module]
-            module_state.pending_commands.append("deactivate")
             module_state.waiter = None
         await log(self._state, f"deactivating {module}")
+
+
+async def send_device_command(module: ModuleConfig, command: str) -> None:
+    async with httpx.AsyncClient(transport=DEVICE_TRANSPORT, timeout=DEVICE_TIMEOUT_SECONDS) as client:
+        try:
+            health = await client.get(f"{module.base_url}/health")
+        except httpx.HTTPError as exc:
+            raise RuntimeError(f"{module.id} module is not connected") from exc
+
+        if health.status_code != 200:
+            raise RuntimeError(f"{module.id} module is not connected")
+        identity = health.json()
+        if identity != {"module": module.id, "type": module.type}:
+            raise RuntimeError(f"{module.id} health identity mismatch")
+
+        response = await client.post(f"{module.base_url}/command", json={"cmd": command})
+        if response.status_code == 409:
+            raise RuntimeError(f"{module.id} module is busy")
+        if response.status_code != 202:
+            raise RuntimeError(f"{module.id} command failed: HTTP {response.status_code}")
 
 
 async def broadcast(state: AppState, payload: dict[str, Any]) -> None:
@@ -256,7 +284,6 @@ async def clear_pending(state: AppState) -> None:
             if module_state.waiter is not None and not module_state.waiter.done():
                 module_state.waiter.cancel()
             module_state.waiter = None
-            module_state.pending_commands.clear()
 
 
 def create_app() -> FastAPI:
@@ -301,19 +328,6 @@ def create_app() -> FastAPI:
                 for module in MODULE_CONFIG
             ]
         }
-
-    @app.get("/poll", response_model=None)
-    async def poll(module: str):
-        if module not in module_ids():
-            raise HTTPException(status_code=404, detail="Unknown module")
-        async with state.lock:
-            module_state = state.modules[module]
-            module_state.last_poll_at = time.monotonic()
-            command = module_state.pending_commands.pop(0) if module_state.pending_commands else None
-        if command is None:
-            return Response(status_code=204)
-        await log(state, f"{module} polled command: {command}")
-        return {"cmd": command}
 
     @app.post("/events")
     async def receive_event(event: DeviceEvent) -> dict[str, str]:

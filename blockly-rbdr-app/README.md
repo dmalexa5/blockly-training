@@ -22,19 +22,19 @@ For local development, open the Vite URL. Vite proxies backend requests to `http
 
 ## ESP32 Contract
 
-- `GET /poll?module=button_left`
-- `GET /poll?module=button_right`
-- `GET /poll?module=rebounder`
-- `POST /events` with JSON like:
+- Backend calls each configured device `GET /health` before commands.
+- Backend sends `POST /command` to the device with `{"cmd":"activate"}` or `{"cmd":"deactivate"}`.
+- Devices send `POST /events` to the backend with JSON like:
 
 ```json
-{"event":"triggered","module":"button_left","active":true,"triggered":true,"uptime_ms":1234}
+{"module":"button_left","event":"triggered"}
 ```
 
-Module names are logical IDs configured in the backend module list. To flash the two physical
-button modules, build the same firmware with the matching IDs:
+Module names are logical IDs configured in the backend module list. Build the shared firmware
+from `module/` with the physical type and matching logical ID:
 
 ```sh
-idf.py -DRBDR_MODULE_NAME=button_left build flash
-idf.py -DRBDR_MODULE_NAME=button_right build flash
+idf.py -DMODULE_TYPE=button -DMODULE_NAME=button_left build flash
+idf.py -DMODULE_TYPE=button -DMODULE_NAME=button_right build flash
+idf.py -DMODULE_TYPE=rebounder -DMODULE_NAME=rebounder build flash
 ```

@@ -7,7 +7,6 @@ export default defineConfig({
         target: 'http://127.0.0.1:8000',
         ws: true,
       },
-      '/poll': 'http://127.0.0.1:8000',
       '/events': 'http://127.0.0.1:8000',
     },
   },
