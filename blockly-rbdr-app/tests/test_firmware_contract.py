@@ -113,11 +113,29 @@ def test_rebounder_firmware_identity_names_are_not_button():
 def test_rebounder_firmware_acceleration_config_defaults():
     cmake = read_rbdr_module("main/CMakeLists.txt")
 
-    assert "set(RBDR_ACCEL_THRESHOLD_G 2.0 " in cmake
-    assert "set(RBDR_ACCEL_EMA_ALPHA 0.6 " in cmake
+    assert "set(RBDR_SENSE_PERIOD_MS 1 " in cmake
+    assert "set(RBDR_ACCEL_THRESHOLD_G 1.2 " in cmake
+    assert "set(RBDR_ACCEL_LOG_PERIOD_MS 20 " in cmake
     assert "set(RBDR_MPU_SDA_GPIO 8 " in cmake
     assert "set(RBDR_MPU_SCL_GPIO 9 " in cmake
     assert "set(RBDR_MPU_I2C_ADDR 0x68 " in cmake
+
+
+def test_rebounder_firmware_uses_unfiltered_absolute_acceleration():
+    source = read_rbdr_module("main/app.cpp")
+
+    assert "sqrtf(raw_sample.x * raw_sample.x + raw_sample.y * raw_sample.y + raw_sample.z * raw_sample.z)" in source
+    assert "const bool is_over_threshold = magnitude_g > RBDR_ACCEL_THRESHOLD_G;" in source
+    assert "update_filter" not in source
+    assert "impact_delta_g" not in source
+
+
+def test_rebounder_firmware_configures_high_bandwidth_mpu_sampling():
+    source = read_rbdr_module("main/app.cpp")
+
+    assert "constexpr uint8_t kMpuRegSampleRateDiv = 0x19;" in source
+    assert "mpu_write_reg(mpu, kMpuRegSampleRateDiv, 0x07)" in source
+    assert "mpu_write_reg(mpu, kMpuRegConfig, 0x00)" in source
 
 
 def test_rebounder_firmware_latches_edge_until_control_task_consumes_it():

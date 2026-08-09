@@ -54,7 +54,7 @@
 #endif
 
 #ifndef RBDR_SENSE_PERIOD_MS
-#define RBDR_SENSE_PERIOD_MS 10
+#define RBDR_SENSE_PERIOD_MS 1
 #endif
 
 #ifndef RBDR_CONTROL_PERIOD_MS
@@ -74,11 +74,7 @@
 #endif
 
 #ifndef RBDR_ACCEL_THRESHOLD_G
-#define RBDR_ACCEL_THRESHOLD_G 2.0f
-#endif
-
-#ifndef RBDR_ACCEL_EMA_ALPHA
-#define RBDR_ACCEL_EMA_ALPHA 0.6f
+#define RBDR_ACCEL_THRESHOLD_G 1.2f
 #endif
 
 #ifndef RBDR_DEACTIVATE_IGNORE_MS
@@ -86,11 +82,8 @@
 #endif
 
 #ifndef RBDR_ACCEL_LOG_PERIOD_MS
-#define RBDR_ACCEL_LOG_PERIOD_MS 1000
+#define RBDR_ACCEL_LOG_PERIOD_MS 20
 #endif
-
-static_assert(RBDR_ACCEL_EMA_ALPHA > 0.0f && RBDR_ACCEL_EMA_ALPHA <= 1.0f,
-              "RBDR_ACCEL_EMA_ALPHA must be > 0 and <= 1");
 
 namespace {
 
@@ -107,6 +100,7 @@ constexpr uint8_t kMpuRegAccelConfig = 0x1C;
 constexpr uint8_t kMpuRegAccelXoutH = 0x3B;
 constexpr uint8_t kMpuRegConfig = 0x1A;
 constexpr uint8_t kMpuRegPwrMgmt1 = 0x6B;
+constexpr uint8_t kMpuRegSampleRateDiv = 0x19;
 constexpr uint8_t kMpuRegWhoAmI = 0x75;
 
 const char *TAG = "rebounder";
@@ -126,13 +120,6 @@ struct axis_sample_t {
     float x;
     float y;
     float z;
-};
-
-struct ema_filter_t {
-    axis_sample_t stage1;
-    axis_sample_t stage2;
-    axis_sample_t stage3;
-    bool seeded;
 };
 
 struct mpu_t {
@@ -514,7 +501,8 @@ esp_err_t mpu_init(mpu_t &mpu)
     }
 
     if ((err = mpu_write_reg(mpu, kMpuRegPwrMgmt1, 0x00)) != ESP_OK ||
-        (err = mpu_write_reg(mpu, kMpuRegConfig, 0x03)) != ESP_OK ||
+        (err = mpu_write_reg(mpu, kMpuRegSampleRateDiv, 0x07)) != ESP_OK ||
+        (err = mpu_write_reg(mpu, kMpuRegConfig, 0x00)) != ESP_OK ||
         (err = mpu_write_reg(mpu, kMpuRegAccelConfig, 0x08)) != ESP_OK) {
         mpu_deinit(mpu);
         return err;
@@ -543,36 +531,8 @@ esp_err_t mpu_read_accel_g(mpu_t &mpu, axis_sample_t *sample)
     return ESP_OK;
 }
 
-axis_sample_t ema_axis(const axis_sample_t &previous, const axis_sample_t &current)
+void reset_accel_state(bool &over_threshold)
 {
-    constexpr float alpha = RBDR_ACCEL_EMA_ALPHA;
-    constexpr float beta = 1.0f - alpha;
-    return {
-        alpha * current.x + beta * previous.x,
-        alpha * current.y + beta * previous.y,
-        alpha * current.z + beta * previous.z,
-    };
-}
-
-axis_sample_t update_filter(ema_filter_t &filter, const axis_sample_t &sample)
-{
-    if (!filter.seeded) {
-        filter.stage1 = sample;
-        filter.stage2 = sample;
-        filter.stage3 = sample;
-        filter.seeded = true;
-        return filter.stage3;
-    }
-
-    filter.stage1 = ema_axis(filter.stage1, sample);
-    filter.stage2 = ema_axis(filter.stage2, filter.stage1);
-    filter.stage3 = ema_axis(filter.stage3, filter.stage2);
-    return filter.stage3;
-}
-
-void reset_filter_state(ema_filter_t &filter, bool &over_threshold)
-{
-    filter = {};
     over_threshold = false;
 }
 
@@ -602,7 +562,6 @@ void comms_task(void *)
 void sense_task(void *)
 {
     mpu_t mpu = {};
-    ema_filter_t filter = {};
     bool over_threshold = false;
     uint32_t next_retry_ms = 0;
     uint32_t next_log_ms = 0;
@@ -610,7 +569,7 @@ void sense_task(void *)
 
     while (true) {
         if (g_reset_sensor_filter.exchange(false)) {
-            reset_filter_state(filter, over_threshold);
+            reset_accel_state(over_threshold);
         }
 
         const uint32_t now_ms = uptime_ms();
@@ -621,7 +580,7 @@ void sense_task(void *)
                     ESP_LOGW(TAG, "MPU6050 init failed: %s", esp_err_to_name(err));
                     next_retry_ms = now_ms + kMpuRetryMs;
                 } else {
-                    reset_filter_state(filter, over_threshold);
+                    reset_accel_state(over_threshold);
                     read_failure_logged = false;
                     next_log_ms = now_ms + RBDR_ACCEL_LOG_PERIOD_MS;
                 }
@@ -639,7 +598,7 @@ void sense_task(void *)
             }
             mpu_deinit(mpu);
             next_retry_ms = now_ms + kMpuRetryMs;
-            reset_filter_state(filter, over_threshold);
+            reset_accel_state(over_threshold);
             vTaskDelay(pdMS_TO_TICKS(RBDR_SENSE_PERIOD_MS));
             continue;
         }
@@ -649,11 +608,9 @@ void sense_task(void *)
             read_failure_logged = false;
         }
 
-        const bool was_seeded = filter.seeded;
-        const axis_sample_t filtered = update_filter(filter, raw_sample);
-        const float magnitude_g = sqrtf(filtered.x * filtered.x + filtered.y * filtered.y + filtered.z * filtered.z);
+        const float magnitude_g = sqrtf(raw_sample.x * raw_sample.x + raw_sample.y * raw_sample.y + raw_sample.z * raw_sample.z);
         const bool is_over_threshold = magnitude_g > RBDR_ACCEL_THRESHOLD_G;
-        const bool rising_edge = was_seeded && !over_threshold && is_over_threshold;
+        const bool rising_edge = !over_threshold && is_over_threshold;
         over_threshold = is_over_threshold;
 
         mod_state_t state = {};
@@ -667,7 +624,15 @@ void sense_task(void *)
         xSemaphoreGive(g_state_mutex);
 
         if (RBDR_ACCEL_LOG_PERIOD_MS > 0 && static_cast<int32_t>(now_ms - next_log_ms) >= 0) {
-            ESP_LOGI(TAG, "filtered acceleration magnitude=%.3fg", magnitude_g);
+            ESP_LOGI(TAG,
+                     "accel t=%" PRIu32 " raw=%.3f,%.3f,%.3f mag=%.3f over=%s edge=%s",
+                     now_ms,
+                     raw_sample.x,
+                     raw_sample.y,
+                     raw_sample.z,
+                     magnitude_g,
+                     is_over_threshold ? "1" : "0",
+                     rising_edge ? "1" : "0");
             next_log_ms = now_ms + RBDR_ACCEL_LOG_PERIOD_MS;
         }
 
