@@ -203,19 +203,6 @@ bool module_is_rebounder()
     return strcmp(kModuleType, "rebounder") == 0;
 }
 
-void state_desr_read(state_desr_t *out)
-{
-    xSemaphoreTake(g_desr_mutex, portMAX_DELAY);
-    *out = g_desr;
-    xSemaphoreGive(g_desr_mutex);
-}
-
-void state_desr_write(const state_desr_t &in)
-{
-    xSemaphoreTake(g_desr_mutex, portMAX_DELAY);
-    g_desr = in;
-    xSemaphoreGive(g_desr_mutex);
-}
 
 void state_sens_read(state_sens_t *out)
 {

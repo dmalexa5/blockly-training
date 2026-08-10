@@ -3,65 +3,90 @@
 #include <cstdint>
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 
-enum class command_t {
-    none,
-    activate,
-    deactivate,
+
+class SenseInterface {
+public:
+    SenseInterface() = default;
+
+    struct State;
+
+    inline void read_state(State *out) {
+        xSemaphoreTake(mutex, portMAX_DELAY);
+        *out = state;
+        xSemaphoreGive(mutex);
+    }
+
+    virtual void init(); 
+    virtual void task();
+    virtual void deinit();
+
+protected:
+    inline void write_state(const State &in) {
+        xSemaphoreTake(mutex, portMAX_DELAY);
+        state = in;
+        xSemaphoreGive(mutex);
+    }
+
+private:
+    SemaphoreHandle_t mutex = nullptr;
+    State state;
 };
 
-enum class sensor_kind_t {
-    button,
-    rebounder,
+class ControlInterface {
+public:
+    ControlInterface() = default;
+
+    struct State;
+
+    inline void read_state(State *out) {
+        xSemaphoreTake(mutex, portMAX_DELAY);
+        *out = state;
+        xSemaphoreGive(mutex);
+    }
+
+    virtual void init();
+    virtual void task();
+    virtual void deinit();
+
+protected:
+    inline void write_state(const State &in) {
+        xSemaphoreTake(mutex, portMAX_DELAY);
+        state = in;
+        xSemaphoreGive(mutex);
+    }
+
+private:
+    SemaphoreHandle_t mutex = nullptr;
+    State state;
 };
 
-struct button_sens_t {
-    bool pressed;
-    bool fell;
-    bool rose;
-    uint32_t tstamp_ms;
+class CommsInterface {
+public:
+    CommsInterface() = default;
+
+    struct State;
+
+    inline void read_state(State *out) {
+        xSemaphoreTake(mutex, portMAX_DELAY);
+        *out = state;
+        xSemaphoreGive(mutex);
+    }
+
+    virtual void init();
+    virtual void task();
+    virtual void deinit();
+
+protected:
+    inline void write_state(const State &in) {
+        xSemaphoreTake(mutex, portMAX_DELAY);
+        state = in;
+        xSemaphoreGive(mutex);
+    }
+
+private:
+    SemaphoreHandle_t mutex = nullptr;
+    State state;
 };
-
-struct rebounder_sens_t {
-    float magnitude_g;
-    bool rising_edge;
-    uint32_t tstamp_ms;
-};
-
-struct state_sense_t {
-    sensor_kind_t kind;
-    union {
-        button_sens_t button;
-        rebounder_sens_t rebounder;
-    };
-};
-
-struct state_desr_t {
-    command_t command;
-    bool command_pending;
-    uint32_t command_seq;
-    bool event_ack_pending;
-    uint32_t event_ack_seq;
-};
-
-
-struct state_ctrl_t {
-    bool active;
-    bool triggered;
-    bool event_pending;
-    uint32_t event_seq;
-    uint32_t command_seq_seen;
-    char event[24];
-};
-
-
-inline bool module_is_button()
-{
-    return strcmp(MODULE_TYPE, "button") == 0;
-}
-
-inline bool module_is_rebounder()
-{
-    return strcmp(MODULE_TYPE, "rebounder") == 0;
-}
