@@ -9,10 +9,6 @@ ControlInterface control;
 
 extern "C" void app_main(void)
 {
-    g_desr_mutex = xSemaphoreCreateMutex();
-    g_sens_mutex = xSemaphoreCreateMutex();
-    g_ctrl_mutex = xSemaphoreCreateMutex();
-
     ESP_ERROR_CHECK(g_desr_mutex == nullptr ? ESP_ERR_NO_MEM : ESP_OK);
     ESP_ERROR_CHECK(g_sens_mutex == nullptr ? ESP_ERR_NO_MEM : ESP_OK);
     ESP_ERROR_CHECK(g_ctrl_mutex == nullptr ? ESP_ERR_NO_MEM : ESP_OK);
