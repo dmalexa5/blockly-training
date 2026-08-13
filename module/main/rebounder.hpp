@@ -4,20 +4,20 @@
 
 #include "interfaces.hpp"
 
-enum class ButtonCommand {
+enum class RebounderCommand {
     none,
     activate,
     deactivate,
 };
 
-struct ButtonSenseState {
-    bool pressed;
-    bool fell;
-    bool rose;
-    uint32_t tstamp_ms;
+struct RebounderSenseState {
+    float magnitude;
+    bool rising;
+    bool falling;
+    uint32_t tstamp;
 };
 
-struct ButtonControlState {
+struct RebounderControlState {
     bool active;
     bool triggered;
     bool event_pending;
@@ -26,29 +26,29 @@ struct ButtonControlState {
     char event[24];
 };
 
-struct ButtonCommsState {
-    ButtonCommand command;
+struct RebounderCommsState {
+    RebounderCommand command;
     bool command_pending;
     uint32_t command_seq;
     bool event_ack_pending;
     uint32_t event_ack_seq;
 };
 
-class Sense : public SenseInterface<ButtonSenseState> {
+class Sense : public SenseInterface<RebounderSenseState> {
 public:
     void init() override;
     void task() override;
     void deinit() override;
 };
 
-class Control : public ControlInterface<ButtonControlState> {
+class Control : public ControlInterface<RebounderControlState> {
 public:
     void init() override;
     void task() override;
     void deinit() override;
 };
 
-class Comms : public CommsInterface<ButtonCommsState> {
+class Comms : public CommsInterface<RebounderCommsState> {
 public:
     void init() override;
     void task() override;
